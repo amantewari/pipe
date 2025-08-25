@@ -1,0 +1,269 @@
+#!groovy
+/*
+ * This is the standard Jenkinsfile template for CDP demo-java-app
+ * It references the shared Jenkins library from
+ * https://codecloud.web.att.com/projects/ST_JENKINS/repos/official-pipeline-library
+ * You are free to edit this file to meet the needs of your application; however,
+ * several functions are called from the shared library that should be left in place.
+ * These functions are noted with a comment.
+ *
+ * It is recommended to leave the pipeline stages named the same and in the same order.
+ *
+ */
+
+    @Library('cicd_functions@master') _
+
+//def isProduction(String input) { input.contains("production") }
+def isProduction(String input) { input == "PROD" || input == "DR" }
+
+pipeline {
+    //This Jenkins file to build on sogbld (sogbld.snt.bst.bls.com) slave, used for Web App
+    agent none
+    options {
+         buildDiscarder(logRotator(daysToKeepStr: '7', numToKeepStr: '40'))
+    }
+    parameters {
+        // Begin required parameters - do not modify
+        string(name: 'ECO_PIPELINE_ID', defaultValue: '')
+        string(name: 'PHASE', defaultValue: 'SAST', description: 'BUILD, WEBDEPL and INSTALL are valid option ')
+        choice(choices: 'production\ntest\n', description: 'Please select the TEAMUP_ENV (For DORA Metrics)', name: 'TEAMUP_ENV')
+		choice(choices: 'TEST\nDEV\nPROD\nDR\n',  description: 'Please select the App TARGET_ENV ', name: 'TARGET_ENV')
+        string(name: 'APP_FOLDER', defaultValue: '/opt/app/soegcmi/sdt-soeg-cmi.vci.att.com_19066/workspace', description: 'SOEG-CMI')
+		string(name: 'SLAVE_AGENT', defaultValue: 'com.att.soegcmi-sogbld', description: 'Slave Name com.att.soegcmi-sogbld')
+		string(name: 'GIT_REV', defaultValue: 'HEAD', description: 'please enter the revision number, You can validate the available package revision from the main build job.')
+		choice(choices: 'sogdv1-sog.snt.bst.bls.com\nsogdv2-sog.snt.bst.bls.com\nsoglbst1-sog.snt.bst.bls.com\nsoglbst2-sog.snt.bst.bls.com\nsoglfst1-sog.snt.bst.bls.com\nsoglfst2-sog.snt.bst.bls.com\nsogbld-sog.snt.bst.bls.com\nsoglsim-sog.snt.bst.bls.com\nsoglfiew-sog.snt.bst.bls.com\nsoglfien-sog.snt.bst.bls.com\nsoglfieb-sog.snt.bst.bls.com\nsoglpfw1-sog.snt.bst.bls.com\nsoglpfw2-sog.snt.bst.bls.com\nsoglpfn1-sog.snt.bst.bls.com\nsoglpfn2-sog.snt.bst.bls.com\nsoglpfs1-sog.snt.bst.bls.com\nsoglpfs2-sog.snt.bst.bls.com\nsoglpfb1-sog.snt.bst.bls.com\nsoglpfdb-sog.snt.bst.bls.com\nzlp41701-sog.vci.att.com\nzlp41702-sog.vci.att.com\nzlp41703-sog.vci.att.com\nzlp41704-sog.vci.att.com\nzlp41706-sog.vci.att.com\nzlp41707-sog.vci.att.com\nzlp41705-sog.vci.att.com\nzlp41717-sog.vci.att.com\nzlp41708-sog.vci.att.com\nzlp41709-sog.vci.att.com\nzlp41710-sog.vci.att.com\nzlp41711-sog.vci.att.com\nzlp41714-sog.vci.att.com\nzlp41715-sog.vci.att.com\nzlp41713-sog.vci.att.com\nzlp41716-sog.vci.att.com\n', description: 'Please select the node', name: 'NODE')
+        // End required parameters
+    }
+    environment {
+		DEBUG_FLAGS = '-g'
+        TARGET_ENV="${params.TARGET_ENV}"
+        MOTS_ID="19066"
+        APPNAME = "SOEG-CMI"
+        /* Veracode environment variables*/
+        VERACODE_PROXY_HOST = 'sub.proxy.att.com'
+		VERACODE_PROXY_PORT = '8080'
+        VERACODE_CREDS = credentials("VERACODE_API")
+
+        REPO_URL = 'https://github.com/ATT-DP1/apm0010208-soegcmi-soegcmi.git'
+        BUILD_BRANCH = "${env.BRANCH_NAME}"
+        APP_VERSION = '60.4.0'
+    }
+
+
+
+    stages{
+        //This stage will get git code when PHASE is BUILD
+        stage("BUILD"){
+            agent {   label "${params.SLAVE_AGENT}" }
+
+            when {
+                expression { return "${params.PHASE}" =~ /(BUILD.*)/ }
+            }
+
+            steps{
+				echo "Running ${env.BUILD_ID} on ${env.JENKINS_URL} with BRNACH_NAME as ${env.BRANCH_NAME}"
+                //git branch: "${params.GIT_BRANCH}", credentialsId: 'm29413/CDP@soeg123', url: 'https://codecloud.web.att.com/scm/st_soeg/soegse.git' branches/R53.0_CDP_TEST
+				//Build only required folder
+                script{
+					def revision = "${params.GIT_REV}"
+
+					if (revision=='HEAD') {
+                                                  revision="${env.GIT_COMMIT}"
+												  echo "revision is ${revision}"
+                                          }
+
+                   def artifact
+                   artifact = [
+                                 uniqueId: "${APPNAME}-${MOTS_ID}-${BUILD_BRANCH}-${revision}",
+                                 name: "${APPNAME}-${MOTS_ID}",
+                                 version: "${APP_VERSION}",
+                                 gitCommitHash: "${revision}",
+                                 gitRepositoryURL: "${REPO_URL}"
+                               ]
+                   //cicd_notifications.sendDoraMetrics
+                    cicd_notifications.sendDoraMetrics(
+                        buildOrDeploy: "build",
+                        teamUpEnv: "${params.TEAMUP_ENV}",  // Previously ${params.TARGET_ENV}
+                        motsId: "${MOTS_ID}",
+                        project: "${APPNAME}",
+                        pipelineName: "${env.JOB_NAME}",
+                        buildId: "${env.BUILD_ID}",
+                        buildUrl: "${env.BUILD_URL}",   //Previously env.JENKINS_URL
+                        artifact1: artifact
+                    )
+					//checkout scm
+                    //dir ("${params.APP_FOLDER}") {
+                     //      ANT_HOME=${tool 'ANT_AGENT'}
+                    //sh "${ANT_HOME} ${WORKSPACE}/trunk/build.xml}"
+					//sh 'ant -f ${WORKSPACE}/trunk/build.xml'
+					//checkout scm
+
+					withCredentials([usernamePassword(credentialsId: 'AFTSWM_CREDENTIALS', usernameVariable: 'AFTSWM_USERNAME', passwordVariable: 'AFTSWM_PASSWORD')]) {
+                    echo "Using AFTSWM credentials: ${AFTSWM_USERNAME}"
+					sh "git checkout ${revision}"
+                    sh "${ANT_HOME}/bin/ant -f ${WORKSPACE}/trunk/build.xml build create.package"
+					sh "/opt/app/swm/aftswmcli/bin/swmcli component pkgcreate -c com.att.soegcmi:soegcmi-all:1-SOEGCMI_${env.BRANCH_NAME}.${revision} -d /opt/app/soegcmi/smogtemplate"
+					}//end of wtihCredentials
+			    }
+            }
+        }
+
+
+
+        //This stage will get git code when PHASE is BUILD
+        stage("INSTALL"){
+            agent {   label "${params.SLAVE_AGENT}" }
+
+            when {
+                 expression { return params.PHASE.contains('INSTALL') }
+            }
+
+            steps{
+				echo "Install Running ${env.BUILD_ID} on ${env.JENKINS_URL}"
+                //git branch: "${params.GIT_BRANCH}", credentialsId: 'm29413/CDP@soeg123', url: 'https://codecloud.web.att.com/scm/st_soeg/soegse.git' branches/R53.0_CDP_TEST
+				//Build only required folder
+                script{
+					//checkout scm
+                    //dir ("${params.APP_FOLDER}") {
+                     //      ANT_HOME=${tool 'ANT_AGENT'}
+                    //sh "${ANT_HOME} ${WORKSPACE}/trunk/build.xml}"
+					//sh 'ant -f ${WORKSPACE}/trunk/build.xml'
+					//checkout scm
+					//sh "git checkout ${GIT_REV}"
+                   // sh "${ANT_HOME}/bin/ant -f ${WORKSPACE}/trunk/build.xml build create.package"
+					//sh "/opt/app/swm/aftswmcli/bin/swmcli component pkgcreate -c com.att.soegcmi:soegcmi-all:1-SOEGCMI_53.0.${GIT_REV} -d /opt/app/soegcmi/smogtemplate"
+					def revision = "${params.GIT_REV}"
+
+					if (revision=='HEAD') {
+                                                  revision="${env.GIT_COMMIT}"
+												  echo "revision is ${revision}"
+                                          }
+
+
+                     def artifact
+                     artifact = [
+                                 uniqueId: "${APPNAME}-${MOTS_ID}-${BUILD_BRANCH}-${revision}",
+                                 name: "${APPNAME}-${MOTS_ID}",
+                                 version: "${APP_VERSION}",
+                                 gitCommitHash: "${revision}",
+                                 gitRepositoryURL: "${REPO_URL}"
+                               ]
+
+                     //cicd_notifications.sendDoraMetrics
+                     cicd_notifications.sendDoraMetrics(
+                        buildOrDeploy: "deploy",
+                        teamUpEnv: "${params.TEAMUP_ENV}",  // Previously ${params.TARGET_ENV}
+                        isProduction: isProduction("${params.TARGET_ENV}"),
+                        targetEnvironment: "${params.TARGET_ENV}-${params.NODE}",
+                        motsId: "${MOTS_ID}",
+                        project: "${APPNAME}",
+                        pipelineName: "${env.JOB_NAME}",
+                        buildId: "${env.BUILD_ID}",
+                        buildUrl: "${env.BUILD_URL}",   //Previously env.JENKINS_URL
+                        artifact1: artifact
+                      )
+
+					sh "chmod 0777 ${WORKSPACE}/trunk/jenkins_install.sh"
+					sh "${WORKSPACE}/trunk/jenkins_install.sh ${revision} ${NODE} ${env.BRANCH_NAME}"
+			    }
+            }
+        }
+
+              // This stage will perform SONAR Code Analysis with SonarCube tool.
+        // Below parameter can be changed or modified as per need basis
+	    stage("SONAR"){
+            agent {   label "${params.SLAVE_AGENT}" }
+            options {
+            	                skipDefaultCheckout()
+            }
+            when {
+                expression { return "${params.PHASE}" =~ /(SONAR.*)/ }
+            }
+            steps{
+                echo '**Sonar Qube Scan**'
+                //withSonarQubeEnv('SOEGSonar'){
+                //withSonarQubeEnv(["PATH+TOOLS=${ tool 'sonar' }/bin:${ tool 'jdk11' }/bin", "JAVA_HOME=${ tool 'jdk11' }",]) \
+                withSonarQubeEnv('Community Sonar'){
+                sh "export JAVA_HOME=/opt/app/soegadm/appl/java/jdk/jdk-17.0.12; /home/m58221/sonar-scanner-4.4.0.2170/bin/sonar-scanner \
+                        -Dproject.settings=sonar.properties"
+
+                }
+            }
+        }
+        //This stage will perform VERACODE Security Static scan
+        stage("SAST") {
+            agent {   label "${params.SLAVE_AGENT}" }
+        when {
+        expression { return params.PHASE.contains('SAST') }
+    }
+            steps {
+		script {    	def revision = "${params.GIT_REV}"
+
+					if (revision=='HEAD') {
+                                                  revision="${env.GIT_COMMIT}"
+												  echo "revision is ${revision}"
+                                          }
+					//checkout scm
+                    //dir ("${params.APP_FOLDER}") {
+                     //      ANT_HOME=${tool 'ANT_AGENT'}
+                    //sh "${ANT_HOME} ${WORKSPACE}/trunk/build.xml}"
+					//sh 'ant -f ${WORKSPACE}/trunk/build.xml'
+					//checkout scm
+					sh "git checkout ${revision}"
+                    sh "${ANT_HOME}/bin/ant -f ${WORKSPACE}/trunk/build.xml build create.package"
+                    def vAppName = "19066-SOEG-CMI"                     // This should match to your veracode profile app name
+                    def vSandBoxName = vAppName + "-${BUILD_NUMBER}-${NODE}"    // This is used for Sandbox name for your app
+                    def vScanName = vSandBoxName                        //Scan name
+                    def vUpldPattrn= "**/trunk/smog/SmogBuild/dist/SmogEar.ear"                           // file type which you want to uplolad
+                    withCredentials([usernamePassword(credentialsId: 'VERACODE_API', usernameVariable: 'VERACODE_CREDS_USR', passwordVariable: 'VERACODE_CREDS_PSW')]) {
+                            try {
+                                veracode applicationName: vAppName,
+                                createProfile: true,
+                                criticality: 'VeryHigh',
+                                debug: true,
+                                createSandbox: true,
+                                sandboxName: vSandBoxName,
+                                scanName: vScanName,
+                                teams: "Default Team",
+                                uploadIncludesPattern: vUpldPattrn,
+                                useIDkey: true,
+                                vid: "${VERACODE_CREDS_USR}",                   //Veracode API UserID
+                                vkey: "${VERACODE_CREDS_PSW}",                  //Veracode API Password
+                                useProxy: true,
+                                pHost: "${VERACODE_PROXY_HOST}",                //Veracode Proxy one.proxy.att.com
+                                pPort: "${VERACODE_PROXY_PORT}"                 //VERACODE_PROXY_PORT = '8080'
+                            }
+                            catch(Exception ex) {
+                                println 'unable to scan error:' + ex.toString()
+                                ex.printStackTrace()
+                            }
+                    } //end of withCredentials
+                }
+			}
+        }
+
+		stage("DAST-SCAN") {
+			 agent {   label "${params.SLAVE_AGENT}" }
+    when {
+        expression { return params.PHASE.contains('DAST') }
+    }
+    steps {
+        script {
+            def dastConfigFileName = 'dast-config.yaml'
+            if (fileExists(dastConfigFileName)) {
+                def dastConfig = readYaml file: dastConfigFileName
+                echo 'dast scan jobConfig:' + dastConfig
+                dsoDastScan SCAN_TYPE: 'DAST-SCAN',
+                        MOTSID: dastConfig.MOTSID,
+                        GROUP_ID: dastConfig.GROUP_ID,
+                        ARTIFACT_ID: dastConfig.ARTIFACT_ID,
+                        VERSION: dastConfig.VERSION,
+                        REPO_BRANCH: dastConfig.BRANCH_NAME
+            }
+        }
+    }
+
+		}
+}
+
+}

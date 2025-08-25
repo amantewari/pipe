@@ -1,0 +1,110 @@
+name: CI Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      PHASE:
+        description: 'Pipeline phase (BUILD, INSTALL, SAST, SONAR, DAST)'
+        required: true
+        default: 'SAST'
+      TEAMUP_ENV:
+        description: 'TeamUp Environment (production/test)'
+        required: true
+        default: 'test'
+      TARGET_ENV:
+        description: 'Target Environment (TEST/DEV/PROD/DR)'
+        required: true
+        default: 'DEV'
+      GIT_REV:
+        description: 'Git revision to build'
+        required: true
+        default: 'HEAD'
+
+jobs:
+  build:
+    if: ${{ github.event.inputs.PHASE == 'BUILD' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ github.event.inputs.GIT_REV }}
+
+      - name: Set up Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Build with Ant
+        run: |
+          ant -f trunk/build.xml build create.package
+
+      - name: Send Dora Metrics (Build)
+        run: |
+          echo "Sending Dora metrics for build..."
+
+  install:
+    if: ${{ github.event.inputs.PHASE == 'INSTALL' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ github.event.inputs.GIT_REV }}
+
+      - name: Install Application
+        run: |
+          chmod +x trunk/jenkins_install.sh
+          ./trunk/jenkins_install.sh ${{ github.event.inputs.GIT_REV }} ${{ github.event.inputs.TARGET_ENV }} ${{ github.ref_name }}
+
+      - name: Send Dora Metrics (Deploy)
+        run: |
+          echo "Sending Dora metrics for deploy..."
+
+  sonar:
+    if: ${{ github.event.inputs.PHASE == 'SONAR' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarcloud-github-action@master
+        with:
+          projectBaseDir: .
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  sast:
+    if: ${{ github.event.inputs.PHASE == 'SAST' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Build for Veracode
+        run: |
+          ant -f trunk/build.xml build create.package
+
+      - name: Veracode Upload & Scan
+        uses: veracode/veracode-uploadandscan-action@main
+        with:
+          appname: '19066-SOEG-CMI'
+          createprofile: true
+          version: ${{ github.run_id }}
+          filepath: 'trunk/smog/SmogBuild/dist/SmogEar.ear'
+          vid: ${{ secrets.VERACODE_API_ID }}
+          vkey: ${{ secrets.VERACODE_API_KEY }}
+
+  dast:
+    if: ${{ github.event.inputs.PHASE == 'DAST' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Run DAST Scan
+        run: |
+          echo "Running DAST scan using dast-config.yaml"
+          # Replace with actual DAST tool CLI or API call
